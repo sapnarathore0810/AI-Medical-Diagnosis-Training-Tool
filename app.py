@@ -1,16 +1,19 @@
 import streamlit as st
 import psycopg2
 import bcrypt
+import joblib
+import pandas as pd
+import numpy as np
 import random
 
-# ---------------- DATABASE  CONNECTION ----------------
+# ---------------- DATABASE CONNECTION ----------------
 def get_connection():
-    return psycopg2.connect( 
+    return psycopg2.connect(
         host="localhost",
         dbname="medical_ai",
         user="postgres",
-        password="1234",
-        port=5432  
+        password="12345678",
+        port=5432
     )
 
 # Initialize DB
@@ -37,7 +40,7 @@ def add_user(name, email, password):
     cur = conn.cursor()
     hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
-        cur.execute("INSERT INTO users (name, email, password) VALUES (%s, %s, %s)", 
+        cur.execute("INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
                     (name, email, hashed_pw))
         conn.commit()
         return True, "✅ Account created successfully! Please log in."
@@ -73,8 +76,6 @@ if "user" not in st.session_state:
     st.session_state.user = None
 if "mode" not in st.session_state:
     st.session_state.mode = None
-
-
 
 # ---------------- LOGIN / SIGNUP PAGE ----------------
 if not st.session_state.logged_in:
@@ -112,13 +113,11 @@ if not st.session_state.logged_in:
             else:
                 st.error("⚠️ Please fill all fields.")
 
- # ---------------- MODE SELECTION PAGE ----------------
+# ---------------- MODE SELECTION PAGE ----------------
 elif st.session_state.logged_in and st.session_state.mode is None:
-    # Top Section
     st.markdown("## Welcome 👋")
     st.write(f"Hello, {st.session_state.user[1]}!")
 
-    # Logout button
     if st.button("Logout"):
         st.session_state.logged_in = False
         st.session_state.user = None
@@ -165,7 +164,6 @@ elif st.session_state.logged_in and st.session_state.mode is None:
         unsafe_allow_html=True
     )
 
-    # Two cards side by side
     col1, col2 = st.columns(2)
 
     with col1:
@@ -198,162 +196,139 @@ elif st.session_state.logged_in and st.session_state.mode is None:
             st.session_state.mode = "training"
             st.rerun()
 
+
+
+
+# ---------------- LOAD MODELS ----------------
+diabetes_model = joblib.load("models/diabetes_model.pkl")
+diabetes_features = joblib.load("models/diabetes_features.pkl")
+diabetes_encoders = joblib.load("models/diabetes_encoders.pkl")
+
+bp_model = joblib.load("models/bp_model.pkl")
+bp_features = joblib.load("models/bp_features.pkl")
+bp_scaler = joblib.load("models/bp_scaler.pkl")
+
+lung_rf = joblib.load("models/lungcancer_rf_model.pkl")
+lung_scaler = joblib.load("models/lungcancer_scaler.pkl")
+lung_features = joblib.load("models/lungcancer_features.pkl")
+
 # ---------------- DIAGNOSIS MODE ----------------
-elif st.session_state.mode == "diagnosis":
+if st.session_state.mode == "diagnosis":
     st.subheader("🩺 Diagnosis Mode")
     disease_choice = st.selectbox(
         "Select Disease",
         ["Select", "Diabetes", "Blood Pressure Abnormality", "Lung Cancer"]
     )
 
-    # ---------------- Diabetes ----------------
     if disease_choice == "Diabetes":
         st.markdown("### 🩸 Diabetes Risk Assessment")
         diabetes_data = {
-            "Level_of_Hemoglobin": st.number_input("Level of Hemoglobin", 5.0, 20.0, step=0.1),
-            "Genetic_Pedigree_Coefficient": st.number_input("Genetic Pedigree Coefficient", 0.0, 5.0, step=0.01),
-            "Age": st.number_input("Age", 0, 120, step=1),
-            "BMI": st.number_input("BMI", 10.0, 60.0, step=0.1),
-            "Sex": st.selectbox("Sex", ["Male", "Female"]),
-            "Pregnancy": st.selectbox("Pregnancy", [0, 1]),
-            "Smoking": st.selectbox("Smoking", [0, 1]),
-            "Physical_activity": st.number_input("Physical Activity (hrs/day)", 0.0, 24.0, step=0.5),
-            "salt_content_in_the_diet": st.number_input("Salt content in diet (g/day)", 0.0, 20.0, step=0.1),
-            "alcohol_consumption_per_day": st.number_input("Alcohol consumption (drinks/day)", 0.0, 10.0, step=0.1),
-            "Level_of_Stress": st.selectbox("Level of Stress (1–3)", [1, 2, 3]),
-            "Chronic_kidney_disease": st.selectbox("Chronic Kidney Disease", [0, 1]),
-            "Adrenal_and_thyroid_disorders": st.selectbox("Adrenal and Thyroid Disorders", [0, 1]),
+            "age": st.number_input("Age", 0, 120, step=1),
+            "gender": st.selectbox("Gender", ["male", "female"]),
+            "hypertension": st.selectbox("Hypertension (0=No, 1=Yes)", [0, 1]),
+            "heart_disease": st.selectbox("Heart Disease (0=No, 1=Yes)", [0, 1]),
+            "smoking_history": st.selectbox("Smoking History", ["never", "current", "former", "not current", "ever", "No Info"]),
+            "bmi": st.number_input("BMI", 10.0, 60.0, step=0.1),
             "HbA1c_level": st.number_input("HbA1c Level", 3.0, 15.0, step=0.1),
-            "Blood_Glucose_Level": st.number_input("Blood Glucose Level", 50, 400, step=1),
+            "blood_glucose_level": st.number_input("Blood Glucose Level", 50, 400, step=1),
         }
+
         if st.button("Predict Diabetes Risk"):
-            if diabetes_data["HbA1c_level"] > 6.5 or diabetes_data["Blood_Glucose_Level"] > 140:
-                st.error("⚠️ High Risk of Diabetes! Please consult a doctor.")
+            new_df = pd.DataFrame([diabetes_data])
+            for col, enc in diabetes_encoders.items():
+                if col in new_df:
+                    new_df[col] = enc.transform(new_df[col].astype(str).str.lower())
+            new_df = new_df.reindex(columns=diabetes_features, fill_value=0)
+            prediction = diabetes_model.predict(new_df)[0]
+
+            diabetes_data["diabetes"] = prediction
+            pd.DataFrame([diabetes_data]).to_csv("diabetes.csv", mode="a", header=False, index=False)
+
+            if prediction == 1:
+                st.error("⚠️ High Risk of Diabetes. Please consult a doctor.")
             else:
                 st.success("✅ Low Risk of Diabetes.")
+            st.info("ℹ️ Case saved into diabetes.csv")
 
-    # ---------------- Blood Pressure ----------------
     elif disease_choice == "Blood Pressure Abnormality":
         st.markdown("### 🫀 Blood Pressure Abnormality Prediction")
         bp_data = {
-            "Age": st.number_input("Age", 0, 120, step=1),
-            "Gender": st.selectbox("Gender", ["Male", "Female"]),
-            "Smoking": st.selectbox("Smoking", [0, 1, 2]),
-            "Chronic_Lung_Disease": st.selectbox("Chronic Lung Disease", [0, 1]),
-            "Fatigue": st.selectbox("Fatigue (0=None,1=Mild,2=Severe)", [0,1,2]),
-            "Dust_Allergy": st.selectbox("Dust Allergy", [0,1]),
-            "Wheezing": st.selectbox("Wheezing", [0,1]),
-            "Alcohol_use": st.selectbox("Alcohol use", [0,1]),
-            "Coughing_of_Blood": st.selectbox("Coughing of Blood (0=None,1=Yes,2=Severe)", [0,1,2]),
-            "Shortness_of_Breath": st.selectbox("Shortness of Breath (0=None,1=Mild,2=Severe)", [0,1,2]),
-            "Swallowing_Difficulty": st.selectbox("Swallowing Difficulty", [0,1]),
-            "Chest_Pain": st.selectbox("Chest Pain (0=None,1=Mild,2=Severe)", [0,1,2]),
-            "Genetic_Risk": st.selectbox("Genetic Risk (0=None,1=Low,2=Medium,3=High)", [0,1,2,3]),
-            "Weight_Loss": st.selectbox("Weight Loss (0=None,1=Mild,2=Severe)", [0,1,2])
+            "Level_of_Hemoglobin": st.number_input("Level of Hemoglobin:", 05.0, 20.0, step=0.1),
+            "Genetic_Pedigree_Coefficient": st.number_input("Genetic Pedigree Coefficient:", 0.0, 2.0, step=0.01),
+            "Age": st.number_input("Age:", 0, 120, step=1),
+            "BMI": st.number_input("BMI:", 10.0, 60.0, step=0.1),
+            "Sex": st.selectbox("Sex (0=Male, 1=Female):", [0, 1]),
+            "Pregnancy": st.selectbox("Pregnancy (0/1):", [0, 1]),
+            "Smoking": st.selectbox("Smoking (0/1):", [0, 1]),
+            "Physical_activity": st.number_input("Physical activity:", 0.0, 50000.0, step=0.1),
+            "salt_content_in_the_diet": st.number_input("Salt content(in mg) in the diet:", 0.0, 50000.0, step=0.1),
+            "alcohol_consumption_per_day": st.number_input("Alcohol consumption per day(in ml):", 0.0, 10000.0, step=0.1),
+            "Level_of_Stress": st.selectbox("Level of Stress (1–3):", [1, 2, 3]),
+            "Chronic_kidney_disease": st.selectbox("Chronic kidney disease (0/1):", [0, 1]),
+            "Adrenal_and_thyroid_disorders": st.selectbox("Adrenal and thyroid disorders (0/1):", [0, 1])
         }
-        if st.button("Predict BP Risk"):
-            st.info("⚠️ This is a placeholder prediction. Connect your ML model here.")
 
-    # ---------------- Lung Cancer ----------------
+        if st.button("Predict BP Risk"):
+            new_df = pd.DataFrame([bp_data])
+            for col in bp_features:
+                if col not in new_df.columns:
+                    new_df[col] = 0
+            new_df = new_df[bp_features]
+            new_df_scaled = bp_scaler.transform(new_df)
+            prediction = bp_model.predict(new_df_scaled)[0]
+
+            bp_data["Level"] = prediction
+            pd.DataFrame([bp_data]).to_csv("bp.csv", mode="a", header=False, index=False)
+
+            if prediction == 1:
+                st.error("⚠️ High Risk of Blood Pressure Abnormality.")
+            else:
+                st.success("✅ Low Risk of Blood Pressure Abnormality.")
+            st.info("ℹ️ Case saved into bp.csv")
+
     elif disease_choice == "Lung Cancer":
         st.markdown("### 🫁 Lung Cancer Prediction")
         lung_data = {
             "Age": st.number_input("Age", 0, 120, step=1),
             "Gender": st.selectbox("Gender", ["Male", "Female"]),
             "Smoking": st.selectbox("Smoking (0=None,1=Yes,2=Heavy)", [0,1,2]),
-            "Chronic_Lung_Disease": st.selectbox("Chronic Lung Disease", [0,1]),
+            "Chronic Lung Disease": st.selectbox("Chronic Lung Disease", [0,1]),
             "Fatigue": st.selectbox("Fatigue (0=None,1=Mild,2=Severe)", [0,1,2]),
-            "Dust_Allergy": st.selectbox("Dust Allergy", [0,1]),
+            "Dust Allergy": st.selectbox("Dust Allergy", [0,1]),
             "Wheezing": st.selectbox("Wheezing", [0,1]),
-            "Alcohol_use": st.selectbox("Alcohol use", [0,1]),
-            "Coughing_of_Blood": st.selectbox("Coughing of Blood (0=None,1=Yes,2=Severe)", [0,1,2]),
-            "Shortness_of_Breath": st.selectbox("Shortness of Breath (0=None,1=Mild,2=Severe)", [0,1,2]),
-            "Swallowing_Difficulty": st.selectbox("Swallowing Difficulty", [0,1]),
-            "Chest_Pain": st.selectbox("Chest Pain (0=None,1=Mild,2=Severe)", [0,1,2]),
-            "Genetic_Risk": st.selectbox("Genetic Risk (0=None,1=Low,2=Medium,3=High)", [0,1,2,3]),
-            "Weight_Loss": st.selectbox("Weight Loss (0=None,1=Mild,2=Severe)", [0,1,2])
+            "Alcohol use": st.selectbox("Alcohol use", [0,1]),
+            "Coughing of Blood": st.selectbox("Coughing of Blood (0=None,1=Yes,2=Severe)", [0,1,2]),
+            "Shortness of Breath": st.selectbox("Shortness of Breath (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Swallowing Difficulty": st.selectbox("Swallowing Difficulty", [0,1]),
+            "Chest Pain": st.selectbox("Chest Pain (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Genetic Risk": st.selectbox("Genetic Risk (0=None,1=Low,2=Medium,3=High)", [0,1,2,3]),
+            "Weight Loss": st.selectbox("Weight Loss (0=None,1=Mild,2=Severe)", [0,1,2])
         }
-        if st.button("Predict Lung Cancer Risk"):
-            st.info("⚠️ This is a placeholder prediction. Connect your ML model here.")
 
-    if st.button("⬅️ Back to Mode Selection"):
-        st.session_state.mode = None
-        st.rerun()
+        if st.button("Predict Lung Cancer Risk"):
+            new_df = pd.DataFrame([lung_data])
+            new_df = pd.get_dummies(new_df, drop_first=True)
+            new_df = new_df.reindex(columns=lung_features, fill_value=0)
+            new_df_scaled = lung_scaler.transform(new_df)
+            prediction = lung_rf.predict(new_df_scaled)[0]
+
+            lung_data["Level"] = prediction
+            pd.DataFrame([lung_data]).to_csv("lungcancer.csv", mode="a", header=False, index=False)
+
+            if prediction == 1:
+                st.error("⚠️ High Risk of Lung Cancer.")
+            else:
+                st.success("✅ Low Risk of Lung Cancer.")
+            st.info("ℹ️ Case saved into lungcancer.csv")
+
+
+
+
+
 
 import random
 import streamlit as st
 
-# ------------------- QUESTIONS DATABASE -------------------
-quiz_questions = {
-    "Diabetes": [
-        {"q": "A 55-year-old patient with HbA1c of 8.2% is most likely to have?", 
-         "options": ["Normal", "Prediabetes", "Diabetes"], "answer": "Diabetes"},
-        {"q": "Which of the following is a common medicine for diabetes?", 
-         "options": ["Metformin", "Aspirin", "Paracetamol"], "answer": "Metformin"},
-        {"q": "High blood glucose levels mainly affect which organ first?", 
-         "options": ["Kidney", "Liver", "Skin"], "answer": "Kidney"},
-        {"q": "Which lifestyle change helps most in diabetes prevention?", 
-         "options": ["Exercise & Diet", "Smoking", "Skipping Breakfast"], "answer": "Exercise & Diet"},
-        {"q": "A patient with HbA1c 5.5% is considered?", 
-         "options": ["Normal", "Prediabetes", "Diabetes"], "answer": "Normal"},
-        {"q": "Excessive urination and thirst are symptoms of?", 
-         "options": ["Diabetes", "Asthma", "Cancer"], "answer": "Diabetes"},
-        {"q": "Which hormone is deficient in diabetes?", 
-         "options": ["Insulin", "Thyroxine", "Adrenaline"], "answer": "Insulin"},
-        {"q": "Which test is best to monitor long-term diabetes?", 
-         "options": ["HbA1c", "BP Test", "X-ray"], "answer": "HbA1c"},
-        {"q": "Gestational diabetes occurs during?", 
-         "options": ["Pregnancy", "Old age", "Childhood"], "answer": "Pregnancy"},
-        {"q": "Which complication is common in uncontrolled diabetes?", 
-         "options": ["Kidney failure", "Hair fall", "Fracture"], "answer": "Kidney failure"}
-    ],
-
-    "Blood Pressure Abnormality": [
-        {"q": "Normal BP value is?", 
-         "options": ["120/80 mmHg", "200/100 mmHg", "90/40 mmHg"], "answer": "120/80 mmHg"},
-        {"q": "Hypertension is when systolic BP is above?", 
-         "options": ["140 mmHg", "100 mmHg", "80 mmHg"], "answer": "140 mmHg"},
-        {"q": "Which medicine is commonly prescribed for hypertension?", 
-         "options": ["Amlodipine", "Paracetamol", "Metformin"], "answer": "Amlodipine"},
-        {"q": "A patient with frequent headaches and BP 160/100 likely has?", 
-         "options": ["Hypertension", "Hypotension", "Diabetes"], "answer": "Hypertension"},
-        {"q": "Low BP is called?", 
-         "options": ["Hypotension", "Hypertension", "Stroke"], "answer": "Hypotension"},
-        {"q": "Which organ is MOST affected by long-term high BP?", 
-         "options": ["Heart", "Skin", "Stomach"], "answer": "Heart"},
-        {"q": "Lifestyle change that lowers BP?", 
-         "options": ["Less Salt", "More Junk Food", "No Exercise"], "answer": "Less Salt"},
-        {"q": "Which condition increases BP risk?", 
-         "options": ["Obesity", "Regular Yoga", "Low Stress"], "answer": "Obesity"},
-        {"q": "Which test is used to measure BP?", 
-         "options": ["Sphygmomanometer", "X-ray", "MRI"], "answer": "Sphygmomanometer"},
-        {"q": "Dizziness, fainting may occur due to?", 
-         "options": ["Low BP", "High BP", "Diabetes"], "answer": "Low BP"}
-    ],
-
-    "Lung Cancer": [
-        {"q": "Main risk factor for lung cancer?", 
-         "options": ["Smoking", "Sugar", "Exercise"], "answer": "Smoking"},
-        {"q": "Persistent cough with blood is a sign of?", 
-         "options": ["Lung Cancer", "Diabetes", "Hypertension"], "answer": "Lung Cancer"},
-        {"q": "Which scan helps in detecting lung cancer?", 
-         "options": ["CT Scan", "Blood Sugar Test", "Urine Test"], "answer": "CT Scan"},
-        {"q": "A medicine commonly used in chemotherapy?", 
-         "options": ["Cisplatin", "Paracetamol", "Metformin"], "answer": "Cisplatin"},
-        {"q": "Which group has highest lung cancer risk?", 
-         "options": ["Smokers", "Children", "Vegetarians"], "answer": "Smokers"},
-        {"q": "Shortness of breath and chest pain can be?", 
-         "options": ["Lung Cancer", "Diabetes", "Kidney Failure"], "answer": "Lung Cancer"},
-        {"q": "Secondhand smoke increases?", 
-         "options": ["Lung Cancer Risk", "Height", "Weight"], "answer": "Lung Cancer Risk"},
-        {"q": "Which organ does lung cancer start in?", 
-         "options": ["Lungs", "Kidneys", "Liver"], "answer": "Lungs"},
-        {"q": "Chronic cough for more than 3 weeks should be?", 
-         "options": ["Checked for Lung Cancer", "Ignored", "Self-treated"], "answer": "Checked for Lung Cancer"},
-        {"q": "Best prevention for lung cancer?", 
-         "options": ["Quit Smoking", "Eat More Sugar", "Skip Exercise"], "answer": "Quit Smoking"}
-    ]
-}
 
 # ------------------- QUESTIONS DATABASE -------------------
 quiz_questions = {
