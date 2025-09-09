@@ -1,0 +1,576 @@
+import streamlit as st
+import psycopg2
+import bcrypt
+import random
+
+# ---------------- DATABASE  CONNECTION ----------------
+def get_connection():
+    return psycopg2.connect( 
+        host="localhost",
+        dbname="medical_ai",
+        user="postgres",
+        password="1234",
+        port=5432  
+    )
+
+# Initialize DB
+def init_db():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100),
+            email VARCHAR(100) UNIQUE,
+            password VARCHAR(200)
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_db()
+
+# ---------------- FUNCTIONS ----------------
+def add_user(name, email, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    try:
+        cur.execute("INSERT INTO users (name, email, password) VALUES (%s, %s, %s)", 
+                    (name, email, hashed_pw))
+        conn.commit()
+        return True, "✅ Account created successfully! Please log in."
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return False, "⚠️ Email already registered. Please log in."
+    except Exception as e:
+        conn.rollback()
+        return False, f"❌ Error: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def login_user(email, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, email, password FROM users WHERE email=%s", (email,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    if user and bcrypt.checkpw(password.encode('utf-8'), user[3].encode('utf-8')):
+        return True, user
+    else:
+        return False, None
+
+# ---------------- STREAMLIT APP ----------------
+st.set_page_config(page_title="AI Medical Tool", layout="centered")
+
+# session state for login + mode
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "mode" not in st.session_state:
+    st.session_state.mode = None
+
+
+
+# ---------------- LOGIN / SIGNUP PAGE ----------------
+if not st.session_state.logged_in:
+    login_tab, signup_tab = st.tabs(["🔑 Login", "📝 Signup"])
+
+    with login_tab:
+        st.markdown("## Welcome Back!")
+        login_email = st.text_input("Email", key="login_email")
+        login_password = st.text_input("Password", type="password", key="login_password")
+
+        if st.button("Sign In"):
+            if login_email and login_password:
+                success, user = login_user(login_email, login_password)
+                if success:
+                    st.session_state.logged_in = True
+                    st.session_state.user = user
+                    st.success(f"✅ Logged in successfully! Welcome {user[1]}")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid email or password")
+
+    with signup_tab:
+        st.markdown("## Create an Account")
+        name = st.text_input("Name", key="signup_name")
+        signup_email = st.text_input("Email", key="signup_email")
+        signup_password = st.text_input("Password", type="password", key="signup_password")
+
+        if st.button("Sign Up"):
+            if name and signup_email and signup_password:
+                success, message = add_user(name, signup_email, signup_password)
+                if success:
+                    st.success(message)
+                else:
+                    st.error(message)
+            else:
+                st.error("⚠️ Please fill all fields.")
+
+ # ---------------- MODE SELECTION PAGE ----------------
+elif st.session_state.logged_in and st.session_state.mode is None:
+    # Top Section
+    st.markdown("## Welcome 👋")
+    st.write(f"Hello, {st.session_state.user[1]}!")
+
+    # Logout button
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.user = None
+        st.session_state.mode = None
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Choose a mode")
+
+    # Custom CSS for cards
+    st.markdown(
+        """
+        <style>
+        .mode-card {
+            background: #1e1e1e;
+            border-radius: 16px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.5);
+            transition: transform 0.3s, box-shadow 0.3s;
+            text-align: center;
+            padding: 20px;
+            margin: 10px;
+        }
+        .mode-card:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 12px 30px rgba(0,0,0,0.7);
+        }
+        .mode-icon {
+            font-size: 50px;
+            margin-bottom: 12px;
+        }
+        .mode-title {
+            font-size: 20px;
+            font-weight: bold;
+            color: white;
+            margin-bottom: 8px;
+        }
+        .mode-desc {
+            font-size: 14px;
+            color: #bbb;
+            margin-bottom: 15px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Two cards side by side
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(
+            """
+            <div class="mode-card">
+                <div class="mode-icon">🩺</div>
+                <div class="mode-title">Diagnosis Mode</div>
+                <div class="mode-desc">Analyze data and run diagnostic workflows.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        if st.button("Open Diagnosis", key="diagnosis_btn"):
+            st.session_state.mode = "diagnosis"
+            st.rerun()
+
+    with col2:
+        st.markdown(
+            """
+            <div class="mode-card">
+                <div class="mode-icon">🧠</div>
+                <div class="mode-title">Training Mode</div>
+                <div class="mode-desc">Train or fine-tune models with your datasets.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        if st.button("Open Training", key="training_btn"):
+            st.session_state.mode = "training"
+            st.rerun()
+
+# ---------------- DIAGNOSIS MODE ----------------
+elif st.session_state.mode == "diagnosis":
+    st.subheader("🩺 Diagnosis Mode")
+    disease_choice = st.selectbox(
+        "Select Disease",
+        ["Select", "Diabetes", "Blood Pressure Abnormality", "Lung Cancer"]
+    )
+
+    # ---------------- Diabetes ----------------
+    if disease_choice == "Diabetes":
+        st.markdown("### 🩸 Diabetes Risk Assessment")
+        diabetes_data = {
+            "Level_of_Hemoglobin": st.number_input("Level of Hemoglobin", 5.0, 20.0, step=0.1),
+            "Genetic_Pedigree_Coefficient": st.number_input("Genetic Pedigree Coefficient", 0.0, 5.0, step=0.01),
+            "Age": st.number_input("Age", 0, 120, step=1),
+            "BMI": st.number_input("BMI", 10.0, 60.0, step=0.1),
+            "Sex": st.selectbox("Sex", ["Male", "Female"]),
+            "Pregnancy": st.selectbox("Pregnancy", [0, 1]),
+            "Smoking": st.selectbox("Smoking", [0, 1]),
+            "Physical_activity": st.number_input("Physical Activity (hrs/day)", 0.0, 24.0, step=0.5),
+            "salt_content_in_the_diet": st.number_input("Salt content in diet (g/day)", 0.0, 20.0, step=0.1),
+            "alcohol_consumption_per_day": st.number_input("Alcohol consumption (drinks/day)", 0.0, 10.0, step=0.1),
+            "Level_of_Stress": st.selectbox("Level of Stress (1–3)", [1, 2, 3]),
+            "Chronic_kidney_disease": st.selectbox("Chronic Kidney Disease", [0, 1]),
+            "Adrenal_and_thyroid_disorders": st.selectbox("Adrenal and Thyroid Disorders", [0, 1]),
+            "HbA1c_level": st.number_input("HbA1c Level", 3.0, 15.0, step=0.1),
+            "Blood_Glucose_Level": st.number_input("Blood Glucose Level", 50, 400, step=1),
+        }
+        if st.button("Predict Diabetes Risk"):
+            if diabetes_data["HbA1c_level"] > 6.5 or diabetes_data["Blood_Glucose_Level"] > 140:
+                st.error("⚠️ High Risk of Diabetes! Please consult a doctor.")
+            else:
+                st.success("✅ Low Risk of Diabetes.")
+
+    # ---------------- Blood Pressure ----------------
+    elif disease_choice == "Blood Pressure Abnormality":
+        st.markdown("### 🫀 Blood Pressure Abnormality Prediction")
+        bp_data = {
+            "Age": st.number_input("Age", 0, 120, step=1),
+            "Gender": st.selectbox("Gender", ["Male", "Female"]),
+            "Smoking": st.selectbox("Smoking", [0, 1, 2]),
+            "Chronic_Lung_Disease": st.selectbox("Chronic Lung Disease", [0, 1]),
+            "Fatigue": st.selectbox("Fatigue (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Dust_Allergy": st.selectbox("Dust Allergy", [0,1]),
+            "Wheezing": st.selectbox("Wheezing", [0,1]),
+            "Alcohol_use": st.selectbox("Alcohol use", [0,1]),
+            "Coughing_of_Blood": st.selectbox("Coughing of Blood (0=None,1=Yes,2=Severe)", [0,1,2]),
+            "Shortness_of_Breath": st.selectbox("Shortness of Breath (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Swallowing_Difficulty": st.selectbox("Swallowing Difficulty", [0,1]),
+            "Chest_Pain": st.selectbox("Chest Pain (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Genetic_Risk": st.selectbox("Genetic Risk (0=None,1=Low,2=Medium,3=High)", [0,1,2,3]),
+            "Weight_Loss": st.selectbox("Weight Loss (0=None,1=Mild,2=Severe)", [0,1,2])
+        }
+        if st.button("Predict BP Risk"):
+            st.info("⚠️ This is a placeholder prediction. Connect your ML model here.")
+
+    # ---------------- Lung Cancer ----------------
+    elif disease_choice == "Lung Cancer":
+        st.markdown("### 🫁 Lung Cancer Prediction")
+        lung_data = {
+            "Age": st.number_input("Age", 0, 120, step=1),
+            "Gender": st.selectbox("Gender", ["Male", "Female"]),
+            "Smoking": st.selectbox("Smoking (0=None,1=Yes,2=Heavy)", [0,1,2]),
+            "Chronic_Lung_Disease": st.selectbox("Chronic Lung Disease", [0,1]),
+            "Fatigue": st.selectbox("Fatigue (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Dust_Allergy": st.selectbox("Dust Allergy", [0,1]),
+            "Wheezing": st.selectbox("Wheezing", [0,1]),
+            "Alcohol_use": st.selectbox("Alcohol use", [0,1]),
+            "Coughing_of_Blood": st.selectbox("Coughing of Blood (0=None,1=Yes,2=Severe)", [0,1,2]),
+            "Shortness_of_Breath": st.selectbox("Shortness of Breath (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Swallowing_Difficulty": st.selectbox("Swallowing Difficulty", [0,1]),
+            "Chest_Pain": st.selectbox("Chest Pain (0=None,1=Mild,2=Severe)", [0,1,2]),
+            "Genetic_Risk": st.selectbox("Genetic Risk (0=None,1=Low,2=Medium,3=High)", [0,1,2,3]),
+            "Weight_Loss": st.selectbox("Weight Loss (0=None,1=Mild,2=Severe)", [0,1,2])
+        }
+        if st.button("Predict Lung Cancer Risk"):
+            st.info("⚠️ This is a placeholder prediction. Connect your ML model here.")
+
+    if st.button("⬅️ Back to Mode Selection"):
+        st.session_state.mode = None
+        st.rerun()
+
+import random
+import streamlit as st
+
+# ------------------- QUESTIONS DATABASE -------------------
+quiz_questions = {
+    "Diabetes": [
+        {"q": "A 55-year-old patient with HbA1c of 8.2% is most likely to have?", 
+         "options": ["Normal", "Prediabetes", "Diabetes"], "answer": "Diabetes"},
+        {"q": "Which of the following is a common medicine for diabetes?", 
+         "options": ["Metformin", "Aspirin", "Paracetamol"], "answer": "Metformin"},
+        {"q": "High blood glucose levels mainly affect which organ first?", 
+         "options": ["Kidney", "Liver", "Skin"], "answer": "Kidney"},
+        {"q": "Which lifestyle change helps most in diabetes prevention?", 
+         "options": ["Exercise & Diet", "Smoking", "Skipping Breakfast"], "answer": "Exercise & Diet"},
+        {"q": "A patient with HbA1c 5.5% is considered?", 
+         "options": ["Normal", "Prediabetes", "Diabetes"], "answer": "Normal"},
+        {"q": "Excessive urination and thirst are symptoms of?", 
+         "options": ["Diabetes", "Asthma", "Cancer"], "answer": "Diabetes"},
+        {"q": "Which hormone is deficient in diabetes?", 
+         "options": ["Insulin", "Thyroxine", "Adrenaline"], "answer": "Insulin"},
+        {"q": "Which test is best to monitor long-term diabetes?", 
+         "options": ["HbA1c", "BP Test", "X-ray"], "answer": "HbA1c"},
+        {"q": "Gestational diabetes occurs during?", 
+         "options": ["Pregnancy", "Old age", "Childhood"], "answer": "Pregnancy"},
+        {"q": "Which complication is common in uncontrolled diabetes?", 
+         "options": ["Kidney failure", "Hair fall", "Fracture"], "answer": "Kidney failure"}
+    ],
+
+    "Blood Pressure Abnormality": [
+        {"q": "Normal BP value is?", 
+         "options": ["120/80 mmHg", "200/100 mmHg", "90/40 mmHg"], "answer": "120/80 mmHg"},
+        {"q": "Hypertension is when systolic BP is above?", 
+         "options": ["140 mmHg", "100 mmHg", "80 mmHg"], "answer": "140 mmHg"},
+        {"q": "Which medicine is commonly prescribed for hypertension?", 
+         "options": ["Amlodipine", "Paracetamol", "Metformin"], "answer": "Amlodipine"},
+        {"q": "A patient with frequent headaches and BP 160/100 likely has?", 
+         "options": ["Hypertension", "Hypotension", "Diabetes"], "answer": "Hypertension"},
+        {"q": "Low BP is called?", 
+         "options": ["Hypotension", "Hypertension", "Stroke"], "answer": "Hypotension"},
+        {"q": "Which organ is MOST affected by long-term high BP?", 
+         "options": ["Heart", "Skin", "Stomach"], "answer": "Heart"},
+        {"q": "Lifestyle change that lowers BP?", 
+         "options": ["Less Salt", "More Junk Food", "No Exercise"], "answer": "Less Salt"},
+        {"q": "Which condition increases BP risk?", 
+         "options": ["Obesity", "Regular Yoga", "Low Stress"], "answer": "Obesity"},
+        {"q": "Which test is used to measure BP?", 
+         "options": ["Sphygmomanometer", "X-ray", "MRI"], "answer": "Sphygmomanometer"},
+        {"q": "Dizziness, fainting may occur due to?", 
+         "options": ["Low BP", "High BP", "Diabetes"], "answer": "Low BP"}
+    ],
+
+    "Lung Cancer": [
+        {"q": "Main risk factor for lung cancer?", 
+         "options": ["Smoking", "Sugar", "Exercise"], "answer": "Smoking"},
+        {"q": "Persistent cough with blood is a sign of?", 
+         "options": ["Lung Cancer", "Diabetes", "Hypertension"], "answer": "Lung Cancer"},
+        {"q": "Which scan helps in detecting lung cancer?", 
+         "options": ["CT Scan", "Blood Sugar Test", "Urine Test"], "answer": "CT Scan"},
+        {"q": "A medicine commonly used in chemotherapy?", 
+         "options": ["Cisplatin", "Paracetamol", "Metformin"], "answer": "Cisplatin"},
+        {"q": "Which group has highest lung cancer risk?", 
+         "options": ["Smokers", "Children", "Vegetarians"], "answer": "Smokers"},
+        {"q": "Shortness of breath and chest pain can be?", 
+         "options": ["Lung Cancer", "Diabetes", "Kidney Failure"], "answer": "Lung Cancer"},
+        {"q": "Secondhand smoke increases?", 
+         "options": ["Lung Cancer Risk", "Height", "Weight"], "answer": "Lung Cancer Risk"},
+        {"q": "Which organ does lung cancer start in?", 
+         "options": ["Lungs", "Kidneys", "Liver"], "answer": "Lungs"},
+        {"q": "Chronic cough for more than 3 weeks should be?", 
+         "options": ["Checked for Lung Cancer", "Ignored", "Self-treated"], "answer": "Checked for Lung Cancer"},
+        {"q": "Best prevention for lung cancer?", 
+         "options": ["Quit Smoking", "Eat More Sugar", "Skip Exercise"], "answer": "Quit Smoking"}
+    ]
+}
+
+# ------------------- QUESTIONS DATABASE -------------------
+quiz_questions = {
+    "Diabetes": [
+        {"q": "A 55-year-old patient with HbA1c of 8.2% is most likely to have?",
+         "options": ["Normal", "Prediabetes", "Diabetes"],
+         "answer": "Diabetes",
+         "reason": "HbA1c ≥ 6.5% indicates Diabetes."},
+
+        {"q": "Which of the following is a common medicine for diabetes?",
+         "options": ["Metformin", "Aspirin", "Paracetamol"],
+         "answer": "Metformin",
+         "reason": "Metformin is the first-line drug for type 2 diabetes."},
+
+        {"q": "High blood glucose levels mainly affect which organ first?",
+         "options": ["Kidney", "Liver", "Skin"],
+         "answer": "Kidney",
+         "reason": "Diabetes damages small blood vessels in the kidney (diabetic nephropathy)."},
+
+        {"q": "Which lifestyle change helps most in diabetes prevention?",
+         "options": ["Exercise & Diet", "Smoking", "Skipping Breakfast"],
+         "answer": "Exercise & Diet",
+         "reason": "Healthy diet + regular physical activity help prevent diabetes."},
+
+        {"q": "A patient with HbA1c 5.5% is considered?",
+         "options": ["Normal", "Prediabetes", "Diabetes"],
+         "answer": "Normal",
+         "reason": "Normal HbA1c is below 5.7%."},
+
+        {"q": "Excessive urination and thirst are symptoms of?",
+         "options": ["Diabetes", "Asthma", "Cancer"],
+         "answer": "Diabetes",
+         "reason": "Polyuria & polydipsia are classic diabetes symptoms."},
+
+        {"q": "Which hormone is deficient in diabetes?",
+         "options": ["Insulin", "Thyroxine", "Adrenaline"],
+         "answer": "Insulin",
+         "reason": "Diabetes occurs due to lack of insulin or insulin resistance."},
+
+        {"q": "Which test is best to monitor long-term diabetes?",
+         "options": ["HbA1c", "BP Test", "X-ray"],
+         "answer": "HbA1c",
+         "reason": "HbA1c reflects average glucose over the last 3 months."},
+
+        {"q": "Gestational diabetes occurs during?",
+         "options": ["Pregnancy", "Old age", "Childhood"],
+         "answer": "Pregnancy",
+         "reason": "Gestational diabetes develops during pregnancy."},
+
+        {"q": "Which complication is common in uncontrolled diabetes?",
+         "options": ["Kidney failure", "Hair fall", "Fracture"],
+         "answer": "Kidney failure",
+         "reason": "Diabetes damages kidneys leading to chronic kidney disease."}
+    ],
+
+    "Blood Pressure Abnormality": [
+        {"q": "Normal BP value is?",
+         "options": ["120/80 mmHg", "200/100 mmHg", "90/40 mmHg"],
+         "answer": "120/80 mmHg",
+         "reason": "120/80 mmHg is considered the normal blood pressure."},
+
+        {"q": "Hypertension is when systolic BP is above?",
+         "options": ["140 mmHg", "100 mmHg", "80 mmHg"],
+         "answer": "140 mmHg",
+         "reason": "Systolic BP ≥ 140 mmHg is considered high blood pressure."},
+
+        {"q": "Which medicine is commonly prescribed for hypertension?",
+         "options": ["Amlodipine", "Paracetamol", "Metformin"],
+         "answer": "Amlodipine",
+         "reason": "Amlodipine is a calcium channel blocker used for hypertension."},
+
+        {"q": "A patient with frequent headaches and BP 160/100 likely has?",
+         "options": ["Hypertension", "Hypotension", "Diabetes"],
+         "answer": "Hypertension",
+         "reason": "BP above 140/90 is classified as Hypertension."},
+
+        {"q": "Low BP is called?",
+         "options": ["Hypotension", "Hypertension", "Stroke"],
+         "answer": "Hypotension",
+         "reason": "Hypotension refers to blood pressure lower than normal (usually <90/60)."},
+
+        {"q": "Which organ is MOST affected by long-term high BP?",
+         "options": ["Heart", "Skin", "Stomach"],
+         "answer": "Heart",
+         "reason": "Hypertension causes heart enlargement and risk of failure."},
+
+        {"q": "Lifestyle change that lowers BP?",
+         "options": ["Less Salt", "More Junk Food", "No Exercise"],
+         "answer": "Less Salt",
+         "reason": "Reducing salt intake helps lower high blood pressure."},
+
+        {"q": "Which condition increases BP risk?",
+         "options": ["Obesity", "Regular Yoga", "Low Stress"],
+         "answer": "Obesity",
+         "reason": "Excess weight puts more strain on the heart and blood vessels."},
+
+        {"q": "Which test is used to measure BP?",
+         "options": ["Sphygmomanometer", "X-ray", "MRI"],
+         "answer": "Sphygmomanometer",
+         "reason": "Blood pressure is measured using a sphygmomanometer."},
+
+        {"q": "Dizziness, fainting may occur due to?",
+         "options": ["Low BP", "High BP", "Diabetes"],
+         "answer": "Low BP",
+         "reason": "Hypotension causes inadequate blood flow → dizziness/fainting."}
+    ],
+
+    "Lung Cancer": [
+        {"q": "Main risk factor for lung cancer?",
+         "options": ["Smoking", "Sugar", "Exercise"],
+         "answer": "Smoking",
+         "reason": "90% of lung cancer cases are linked to smoking."},
+
+        {"q": "Persistent cough with blood is a sign of?",
+         "options": ["Lung Cancer", "Diabetes", "Hypertension"],
+         "answer": "Lung Cancer",
+         "reason": "Coughing blood is a common lung cancer symptom."},
+
+        {"q": "Which scan helps in detecting lung cancer?",
+         "options": ["CT Scan", "Blood Sugar Test", "Urine Test"],
+         "answer": "CT Scan",
+         "reason": "CT scans help detect tumors in lungs."},
+
+        {"q": "A medicine commonly used in chemotherapy?",
+         "options": ["Cisplatin", "Paracetamol", "Metformin"],
+         "answer": "Cisplatin",
+         "reason": "Cisplatin is a chemotherapy drug for lung cancer."},
+
+        {"q": "Which group has highest lung cancer risk?",
+         "options": ["Smokers", "Children", "Vegetarians"],
+         "answer": "Smokers",
+         "reason": "Smokers are at highest risk of lung cancer."},
+
+        {"q": "Shortness of breath and chest pain can be?",
+         
+         "options": ["Lung Cancer", "Diabetes", "Kidney Failure"],
+         "answer": "Lung Cancer",
+         "reason": "Lung tumors cause breathing difficulty and chest pain."},
+
+        {"q": "Secondhand smoke increases?",
+         "options": ["Lung Cancer Risk", "Height", "Weight"],
+         "answer": "Lung Cancer Risk",
+         "reason": "Secondhand smoke also damages lungs and raises cancer risk."},
+
+        {"q": "Which organ does lung cancer start in?",
+         "options": ["Lungs", "Kidneys", "Liver"],
+         "answer": "Lungs",
+         "reason": "Lung cancer starts in the lung tissues."},
+
+        {"q": "Chronic cough for more than 3 weeks should be?",
+         "options": ["Checked for Lung Cancer", "Ignored", "Self-treated"],
+         "answer": "Checked for Lung Cancer",
+         "reason": "Persistent cough must be checked for lung cancer."},
+
+        {"q": "Best prevention for lung cancer?",
+         "options": ["Quit Smoking", "Eat More Sugar", "Skip Exercise"],
+         "answer": "Quit Smoking",
+         "reason": "The best way to prevent lung cancer is to avoid smoking."}
+    ]
+}
+
+# ---------------- TRAINING MODE -------------------
+if st.session_state.mode == "training":
+    st.subheader("🎓 Training Mode")
+
+    if "quiz_started" not in st.session_state:
+        st.session_state.quiz_started = False
+    if "selected_disease" not in st.session_state:
+        st.session_state.selected_disease = None
+    if "questions" not in st.session_state:
+        st.session_state.questions = []
+    if "current_q" not in st.session_state:
+        st.session_state.current_q = 0
+    if "score" not in st.session_state:
+        st.session_state.score = 0
+    if "answered" not in st.session_state:
+        st.session_state.answered = False
+
+    # ---- Before Quiz Start ----
+    if not st.session_state.quiz_started:
+        disease_choice = st.selectbox("Select Disease for Training", ["Select", "Diabetes", "Blood Pressure Abnormality", "Lung Cancer"])
+        if st.button("Start Quiz"):
+            if disease_choice != "Select":
+                st.session_state.selected_disease = disease_choice
+                st.session_state.questions = random.sample(quiz_questions[disease_choice], 10)
+                st.session_state.quiz_started = True
+                st.session_state.current_q = 0
+                st.session_state.score = 0
+                st.session_state.answered = False
+                st.rerun()
+
+    # ---- During Quiz ----
+    else:
+        q = st.session_state.questions[st.session_state.current_q]
+        st.write(f"**Q{st.session_state.current_q+1}: {q['q']}**")
+
+        choice = st.radio("Select an option:", q["options"], key=f"q{st.session_state.current_q}")
+
+        if not st.session_state.answered:
+            if st.button("Submit Answer"):
+                st.session_state.answered = True
+                if choice == q["answer"]:
+                    st.success(f"✅ Correct! {q['reason']}")
+                    st.session_state.score += 1
+                else:
+                    st.error(f"❌ Wrong! Correct answer: {q['answer']} \n\n👉 {q['reason']}")
+                st.stop()
+
+        else:
+            if st.button("Next Question ➡️"):
+                st.session_state.current_q += 1
+                st.session_state.answered = False
+                if st.session_state.current_q >= len(st.session_state.questions):
+                    st.success(f"🎉 Quiz Finished! Your Score: {st.session_state.score}/10")
+                    if st.button("⬅️ Back to Mode Selection"):
+                        st.session_state.mode = None
+                        st.session_state.quiz_started = False
+                        st.rerun()
+                else:
+                    st.rerun()
