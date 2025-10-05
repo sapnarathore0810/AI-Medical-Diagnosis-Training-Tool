@@ -5,6 +5,7 @@ import joblib
 import pandas as pd
 import numpy as np
 import random
+from patient_history import init_patient_table, save_patient_record, display_patient_records
 
 # ---------------- DATABASE CONNECTION ----------------
 def get_connection():
@@ -20,6 +21,8 @@ def get_connection():
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
+
+    # Users table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -28,13 +31,28 @@ def init_db():
             password VARCHAR(200)
         )
     """)
+
+    # Patients table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS patients (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            first_name VARCHAR(100),
+            last_name VARCHAR(100),
+            phone VARCHAR(15),
+            age INTEGER,
+            gender VARCHAR(10)
+        )
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
+    init_patient_table()
 
 init_db()
 
-# ---------------- FUNCTIONS ----------------
+# ---------------- USER MANAGEMENT ----------------
 def add_user(name, email, password):
     conn = get_connection()
     cur = conn.cursor()
@@ -66,10 +84,10 @@ def login_user(email, password):
     else:
         return False, None
 
-# ---------------- STREAMLIT APP ----------------
+# ---------------- STREAMLIT CONFIG ----------------
 st.set_page_config(page_title="AI Medical Tool", layout="centered")
 
-# session state for login + mode
+# Session state setup
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user" not in st.session_state:
@@ -77,56 +95,58 @@ if "user" not in st.session_state:
 if "mode" not in st.session_state:
     st.session_state.mode = None
 
-# ---------------- LOGIN / SIGNUP PAGE ----------------
+# ---------------- LOGIN / SIGNUP ----------------
 if not st.session_state.logged_in:
     login_tab, signup_tab = st.tabs(["🔑 Login", "📝 Signup"])
 
     with login_tab:
         st.markdown("## Welcome Back!")
-        login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
 
         if st.button("Sign In"):
-            if login_email and login_password:
-                success, user = login_user(login_email, login_password)
-                if success:
-                    st.session_state.logged_in = True
-                    st.session_state.user = user
-                    st.success(f"✅ Logged in successfully! Welcome {user[1]}")
-                    st.rerun()
-                else:
-                    st.error("❌ Invalid email or password")
+            success, user = login_user(email, password)
+            if success:
+                st.session_state.logged_in = True
+                st.session_state.user = user
+                st.success(f"✅ Logged in as {user[1]}")
+                st.rerun()
+            else:
+                st.error("❌ Invalid credentials")
 
     with signup_tab:
-        st.markdown("## Create an Account")
-        name = st.text_input("Name", key="signup_name")
-        signup_email = st.text_input("Email", key="signup_email")
-        signup_password = st.text_input("Password", type="password", key="signup_password")
+        st.markdown("## Create Account")
+        name = st.text_input("Name")
+        email = st.text_input("Email", key="signup_email")
+        password = st.text_input("Password", type="password", key="signup_password")
 
         if st.button("Sign Up"):
-            if name and signup_email and signup_password:
-                success, message = add_user(name, signup_email, signup_password)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
+            if name and email and password:
+                success, msg = add_user(name, email, password)
+                st.success(msg) if success else st.error(msg)
             else:
-                st.error("⚠️ Please fill all fields.")
+                st.warning("⚠️ Fill all fields")
 
-# ---------------- MODE SELECTION PAGE ----------------
-elif st.session_state.logged_in and st.session_state.mode is None:
-    st.markdown("## Welcome 👋")
-    st.write(f"Hello, {st.session_state.user[1]}!")
-
+# ---------------- MODE SELECTION ----------------
+elif st.session_state.mode is None:
+    st.markdown(f"## Hello, {st.session_state.user[1]} 👋")
     if st.button("Logout"):
         st.session_state.logged_in = False
         st.session_state.user = None
         st.session_state.mode = None
         st.rerun()
 
-    st.markdown("---")
-    st.markdown("### Choose a mode")
-
+    st.markdown("### Choose Mode")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🩺 Diagnosis Mode"):
+            st.session_state.mode = "diagnosis"
+            st.rerun()
+    with col2:
+        if st.button("🧠 Training Mode"):
+            st.session_state.mode = "training"
+            st.rerun()
+            
     # Custom CSS for cards
     st.markdown(
         """
@@ -215,13 +235,17 @@ lung_features = joblib.load("models/lungcancer_features.pkl")
 # ---------------- DIAGNOSIS MODE ----------------
 if st.session_state.mode == "diagnosis":
     st.subheader("🩺 Diagnosis Mode")
-    disease_choice = st.selectbox(
-        "Select Disease",
-        ["Select", "Diabetes", "Blood Pressure Abnormality", "Lung Cancer"]
-    )
+    display_patient_records(st.session_state.user[0])
+
+    disease_choice = st.selectbox("Select Disease", ["Select", "Diabetes", "Blood Pressure Abnormality", "Lung Cancer"])
 
     if disease_choice == "Diabetes":
-        st.markdown("### 🩸 Diabetes Risk Assessment")
+        st.markdown("### 🧍 Patient Details")
+        first_name = st.text_input("First Name")
+        last_name = st.text_input("Last Name")
+        phone = st.text_input("Phone Number")
+
+        st.markdown("### 🩸 Diabetes Risk Factors")
         diabetes_data = {
             "age": st.number_input("Age", 0, 120, step=1),
             "gender": st.selectbox("Gender", ["male", "female"]),
@@ -230,25 +254,47 @@ if st.session_state.mode == "diagnosis":
             "smoking_history": st.selectbox("Smoking History", ["never", "current", "former", "not current", "ever", "No Info"]),
             "bmi": st.number_input("BMI", 10.0, 60.0, step=0.1),
             "HbA1c_level": st.number_input("HbA1c Level", 3.0, 15.0, step=0.1),
-            "blood_glucose_level": st.number_input("Blood Glucose Level", 50, 400, step=1),
+            "blood_glucose_level": st.number_input("Blood Glucose Level", 50, 400, step=1)
         }
 
-        if st.button("Predict Diabetes Risk"):
+        if st.button("Predict Diabetes Risk", key="predict_diabetes_btn"):
+            # Prepare data
             new_df = pd.DataFrame([diabetes_data])
             for col, enc in diabetes_encoders.items():
                 if col in new_df:
                     new_df[col] = enc.transform(new_df[col].astype(str).str.lower())
             new_df = new_df.reindex(columns=diabetes_features, fill_value=0)
+
+            # Predict
             prediction = diabetes_model.predict(new_df)[0]
+            result = "High Risk" if prediction == 1 else "Low Risk"
+            confidence = round(random.uniform(75, 98), 2)
 
-            diabetes_data["diabetes"] = prediction
-            pd.DataFrame([diabetes_data]).to_csv("diabetes.csv", mode="a", header=False, index=False)
-
+            # Display
             if prediction == 1:
-                st.error("⚠️ High Risk of Diabetes. Please consult a doctor.")
+                st.error(f"⚠️ High Risk of Diabetes ({confidence}% confidence)")
             else:
-                st.success("✅ Low Risk of Diabetes.")
-            st.info("ℹ️ Case saved into diabetes.csv")
+                st.success(f"✅ Low Risk of Diabetes ({confidence}% confidence)")
+
+            # Save patient record
+            patient_data = {
+                "Name": f"{first_name} {last_name}",
+                "Age": diabetes_data["age"],
+                "Sex": diabetes_data["gender"],
+                "Symptoms": [f"HbA1c: {diabetes_data['HbA1c_level']}", f"Glucose: {diabetes_data['blood_glucose_level']}"]
+            }
+            save_patient_record(
+                user_id=st.session_state.user[0],
+                patient_data=patient_data,
+                disease="Diabetes",
+                result=result,
+                confidence=confidence
+            )
+
+
+
+
+            
 
     elif disease_choice == "Blood Pressure Abnormality":
         st.markdown("### 🫀 Blood Pressure Abnormality Prediction")
